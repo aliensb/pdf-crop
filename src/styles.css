@@ -286,6 +286,7 @@ h2 {
 
 .image-card {
   background: #ffffff;
+  border: 1px solid #dce3eb;
   overflow: hidden;
 }
 
@@ -338,6 +339,17 @@ h2 {
     8px -8px,
     -8px 0;
   background-size: 16px 16px;
+}
+
+.mini-image-page {
+  background: #ffffff;
+  box-shadow: 0 4px 12px rgba(27, 39, 51, 0.12);
+  max-height: 132px;
+  max-width: calc(100% - 14px);
+  overflow: hidden;
+  pointer-events: none;
+  position: relative;
+  width: 92px;
 }
 
 .thumb-meta {

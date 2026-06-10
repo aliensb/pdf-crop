@@ -624,7 +624,12 @@ function ImagePageGrid({
       <div className="page-grid">
         <div className={selectedOrder ? "page-thumb selected image-card" : "page-thumb image-card"}>
           <div className="thumb-canvas image-thumb">
-            <ImageCanvasPreview source={source} compact />
+            <div
+              className="mini-image-page"
+              style={{ aspectRatio: `${source.pageSize.width} / ${source.pageSize.height}` }}
+            >
+              <ImageCanvasPreview source={source} compact />
+            </div>
           </div>
           <div className="thumb-meta">
             <span>图片页</span>
