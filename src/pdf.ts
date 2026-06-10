@@ -1,6 +1,6 @@
 import { PDFDocument } from "pdf-lib";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import type { SelectedPage, SourcePdf } from "./types";
+import type { SelectedPage, SourceFile, SourcePdf } from "./types";
 
 let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null;
 
@@ -32,13 +32,15 @@ export async function loadPreviewDocument(source: SourcePdf): Promise<PDFDocumen
 }
 
 export async function buildMergedPdf(
-  sourcePdfs: SourcePdf[],
+  sourceFiles: SourceFile[],
   selectedPages: SelectedPage[],
 ) {
   const outputPdf = await PDFDocument.create();
   const sourceDocs = new Map<string, PDFDocument>();
+  const sourcesById = new Map(sourceFiles.map((source) => [source.id, source]));
 
-  for (const source of sourcePdfs) {
+  for (const source of sourceFiles) {
+    if (source.kind !== "pdf") continue;
     const doc = await PDFDocument.load(source.arrayBuffer.slice(0), {
       ignoreEncryption: true,
     });
@@ -46,10 +48,29 @@ export async function buildMergedPdf(
   }
 
   for (const selected of selectedPages) {
-    const sourceDoc = sourceDocs.get(selected.sourcePdfId);
-    if (!sourceDoc) continue;
-    const [page] = await outputPdf.copyPages(sourceDoc, [selected.pageIndex]);
-    outputPdf.addPage(page);
+    const source = sourcesById.get(selected.sourceFileId);
+    if (!source) continue;
+
+    if (source.kind === "pdf") {
+      const sourceDoc = sourceDocs.get(source.id);
+      if (!sourceDoc) continue;
+      const [page] = await outputPdf.copyPages(sourceDoc, [selected.pageIndex]);
+      outputPdf.addPage(page);
+      continue;
+    }
+
+    const image =
+      source.mimeType === "image/png"
+        ? await outputPdf.embedPng(source.arrayBuffer.slice(0))
+        : await outputPdf.embedJpg(source.arrayBuffer.slice(0));
+    const page = outputPdf.addPage([source.pageSize.width, source.pageSize.height]);
+
+    page.drawImage(image, {
+      x: source.placement.x,
+      y: source.placement.y,
+      width: source.placement.width,
+      height: source.placement.height,
+    });
   }
 
   const bytes = await outputPdf.save();

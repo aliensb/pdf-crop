@@ -26,14 +26,17 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { buildMergedPdf, getPageCount, loadPreviewDocument } from "./pdf";
-import type { PdfError, SelectedPage, SourcePdf } from "./types";
+import type { ImagePlacement, PageSize, PdfError, SelectedPage, SourceFile, SourceImage, SourcePdf } from "./types";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const MAX_TOTAL_SIZE = 200 * 1024 * 1024;
 const MAX_TOTAL_PAGES = 300;
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const A4_PORTRAIT: PageSize = { width: 595.28, height: 841.89 };
+const A4_LANDSCAPE: PageSize = { width: 841.89, height: 595.28 };
 
 function createId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -44,14 +47,90 @@ function formatSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function isPdfFile(file: File) {
+  return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+}
+
+function isImageFile(file: File) {
+  const name = file.name.toLowerCase();
+  return IMAGE_TYPES.has(file.type) || /\.(jpe?g|png|webp)$/.test(name);
+}
+
+function createFitPlacement(imageSize: PageSize, pageSize: PageSize): ImagePlacement {
+  const scale = Math.min(pageSize.width / imageSize.width, pageSize.height / imageSize.height);
+  const width = imageSize.width * scale;
+  const height = imageSize.height * scale;
+
+  return {
+    x: (pageSize.width - width) / 2,
+    y: (pageSize.height - height) / 2,
+    width,
+    height,
+  };
+}
+
+async function prepareImageFile(
+  file: File,
+  arrayBuffer: ArrayBuffer,
+): Promise<Pick<SourceImage, "arrayBuffer" | "mimeType" | "objectUrl" | "imageSize" | "pageSize" | "placement">> {
+  const sourceType = file.type || (file.name.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg");
+
+  if (sourceType === "image/jpeg" || sourceType === "image/png") {
+    const mimeType = sourceType;
+    const blob = new Blob([arrayBuffer.slice(0)], { type: mimeType });
+    const bitmap = await createImageBitmap(blob);
+    const imageSize = { width: bitmap.width, height: bitmap.height };
+    const pageSize = imageSize.width >= imageSize.height ? A4_LANDSCAPE : A4_PORTRAIT;
+    bitmap.close();
+
+    return {
+      arrayBuffer,
+      mimeType,
+      objectUrl: URL.createObjectURL(blob),
+      imageSize,
+      pageSize,
+      placement: createFitPlacement(imageSize, pageSize),
+    };
+  }
+
+  const bitmap = await createImageBitmap(new Blob([arrayBuffer.slice(0)], { type: sourceType }));
+  const imageSize = { width: bitmap.width, height: bitmap.height };
+  const pageSize = imageSize.width >= imageSize.height ? A4_LANDSCAPE : A4_PORTRAIT;
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas unavailable");
+  context.drawImage(bitmap, 0, 0);
+  bitmap.close();
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((nextBlob) => {
+      if (nextBlob) resolve(nextBlob);
+      else reject(new Error("Image conversion failed"));
+    }, "image/jpeg", 0.92);
+  });
+
+  const convertedBuffer = await blob.arrayBuffer();
+  return {
+    arrayBuffer: convertedBuffer,
+    mimeType: "image/jpeg",
+    objectUrl: URL.createObjectURL(blob),
+    imageSize,
+    pageSize,
+    placement: createFitPlacement(imageSize, pageSize),
+  };
+}
+
 export function App() {
-  const [sourcePdfs, setSourcePdfs] = useState<SourcePdf[]>([]);
+  const [sourceFiles, setSourceFiles] = useState<SourceFile[]>([]);
   const [selectedPages, setSelectedPages] = useState<SelectedPage[]>([]);
   const [errors, setErrors] = useState<PdfError[]>([]);
   const [isImporting, setIsImporting] = useState(false);
   const [isBuilding, setIsBuilding] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sourceFilesRef = useRef<SourceFile[]>([]);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -60,8 +139,8 @@ export function App() {
     }),
   );
 
-  const totalSize = sourcePdfs.reduce((sum, file) => sum + file.size, 0);
-  const totalPages = sourcePdfs.reduce((sum, file) => sum + file.pageCount, 0);
+  const totalSize = sourceFiles.reduce((sum, file) => sum + file.size, 0);
+  const totalPages = sourceFiles.reduce((sum, file) => sum + file.pageCount, 0);
   const canBuild = selectedPages.length > 0 && !isBuilding;
 
   useEffect(() => {
@@ -70,23 +149,33 @@ export function App() {
     };
   }, [previewUrl]);
 
+  useEffect(() => {
+    sourceFilesRef.current = sourceFiles;
+  }, [sourceFiles]);
+
+  useEffect(() => {
+    return () => {
+      sourceFilesRef.current.forEach((source) => {
+        if (source.kind === "image") URL.revokeObjectURL(source.objectUrl);
+      });
+    };
+  }, []);
+
   async function importFiles(fileList: FileList | null) {
     if (!fileList?.length) return;
     setIsImporting(true);
     setErrors([]);
 
     const incoming = Array.from(fileList).filter((file) => {
-      if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-        return true;
-      }
+      if (isPdfFile(file) || isImageFile(file)) return true;
       setErrors((current) => [
         ...current,
-        { id: createId("error"), message: `${file.name} 不是 PDF 文件。` },
+        { id: createId("error"), message: `${file.name} 不是支持的 PDF 或图片文件。` },
       ]);
       return false;
     });
 
-    const loaded: SourcePdf[] = [];
+    const loaded: SourceFile[] = [];
 
     for (const file of incoming) {
       if (file.size > MAX_FILE_SIZE) {
@@ -107,7 +196,7 @@ export function App() {
 
       try {
         const arrayBuffer = await file.arrayBuffer();
-        const pageCount = await getPageCount(arrayBuffer);
+        const pageCount = isPdfFile(file) ? await getPageCount(arrayBuffer) : 1;
 
         if (totalPages + loaded.reduce((sum, item) => sum + item.pageCount, 0) + pageCount > MAX_TOTAL_PAGES) {
           setErrors((current) => [
@@ -117,23 +206,36 @@ export function App() {
           continue;
         }
 
-        loaded.push({
-          id: createId("pdf"),
-          name: file.name,
-          size: file.size,
-          arrayBuffer,
-          pageCount,
-        });
+        if (isPdfFile(file)) {
+          loaded.push({
+            id: createId("pdf"),
+            kind: "pdf",
+            name: file.name,
+            size: file.size,
+            arrayBuffer,
+            pageCount,
+          });
+        } else {
+          const image = await prepareImageFile(file, arrayBuffer);
+          loaded.push({
+            id: createId("image"),
+            kind: "image",
+            name: file.name,
+            size: file.size,
+            pageCount: 1,
+            ...image,
+          });
+        }
       } catch {
         setErrors((current) => [
           ...current,
-          { id: createId("error"), message: `${file.name} 无法读取，可能已加密或损坏。` },
+          { id: createId("error"), message: `${file.name} 无法读取，可能已加密、损坏或图片格式不受浏览器支持。` },
         ]);
       }
     }
 
     if (loaded.length) {
-      setSourcePdfs((current) => [...current, ...loaded]);
+      setSourceFiles((current) => [...current, ...loaded]);
       clearPreview();
     }
 
@@ -141,10 +243,10 @@ export function App() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  function togglePage(source: SourcePdf, pageIndex: number) {
+  function togglePage(source: SourceFile, pageIndex: number) {
     setSelectedPages((current) => {
       const existing = current.find(
-        (page) => page.sourcePdfId === source.id && page.pageIndex === pageIndex,
+        (page) => page.sourceFileId === source.id && page.pageIndex === pageIndex,
       );
 
       if (existing) return current.filter((page) => page.id !== existing.id);
@@ -153,8 +255,9 @@ export function App() {
         ...current,
         {
           id: createId("page"),
-          sourcePdfId: source.id,
-          sourcePdfName: source.name,
+          sourceFileId: source.id,
+          sourceFileName: source.name,
+          sourceKind: source.kind,
           pageIndex,
           pageNumber: pageIndex + 1,
         },
@@ -163,14 +266,29 @@ export function App() {
     clearPreview();
   }
 
-  function removeSourcePdf(sourceId: string) {
-    setSourcePdfs((current) => current.filter((source) => source.id !== sourceId));
-    setSelectedPages((current) => current.filter((page) => page.sourcePdfId !== sourceId));
+  function removeSourceFile(sourceId: string) {
+    setSourceFiles((current) => {
+      const removed = current.find((source) => source.id === sourceId);
+      if (removed?.kind === "image") URL.revokeObjectURL(removed.objectUrl);
+      return current.filter((source) => source.id !== sourceId);
+    });
+    setSelectedPages((current) => current.filter((page) => page.sourceFileId !== sourceId));
     clearPreview();
   }
 
   function removeSelectedPage(pageId: string) {
     setSelectedPages((current) => current.filter((page) => page.id !== pageId));
+    clearPreview();
+  }
+
+  function updateImagePlacement(sourceId: string, getPlacement: (source: SourceImage) => ImagePlacement) {
+    setSourceFiles((current) =>
+      current.map((source) =>
+        source.id === sourceId && source.kind === "image"
+          ? { ...source, placement: getPlacement(source) }
+          : source,
+      ),
+    );
     clearPreview();
   }
 
@@ -192,7 +310,7 @@ export function App() {
     setErrors([]);
 
     try {
-      const blob = await buildMergedPdf(sourcePdfs, selectedPages);
+      const blob = await buildMergedPdf(sourceFiles, selectedPages);
       const url = URL.createObjectURL(blob);
       setPreviewUrl((current) => {
         if (current) URL.revokeObjectURL(current);
@@ -213,7 +331,10 @@ export function App() {
   }
 
   function clearAll() {
-    setSourcePdfs([]);
+    sourceFiles.forEach((source) => {
+      if (source.kind === "image") URL.revokeObjectURL(source.objectUrl);
+    });
+    setSourceFiles([]);
     setSelectedPages([]);
     setErrors([]);
     clearPreview();
@@ -224,22 +345,22 @@ export function App() {
       <header className="topbar">
         <div>
           <h1>PDF 拼接工具</h1>
-          <p>上传多个 PDF，按勾选顺序组合页面，并在导出前调整顺序。</p>
+          <p>上传多个 PDF 或图片，按勾选顺序组合页面，并在导出前调整顺序。</p>
         </div>
         <div className="toolbar">
           <input
             ref={fileInputRef}
             className="hidden-input"
             type="file"
-            accept="application/pdf,.pdf"
+            accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
             multiple
             onChange={(event) => importFiles(event.target.files)}
           />
           <button className="primary-button" onClick={() => fileInputRef.current?.click()} disabled={isImporting}>
             {isImporting ? <Loader2 className="spin" size={18} /> : <Upload size={18} />}
-            上传 PDF
+            上传文件
           </button>
-          <button onClick={clearAll} disabled={!sourcePdfs.length && !selectedPages.length}>
+          <button onClick={clearAll} disabled={!sourceFiles.length && !selectedPages.length}>
             <RotateCcw size={18} />
             清空
           </button>
@@ -266,25 +387,25 @@ export function App() {
         <aside className="panel file-panel">
           <div className="panel-heading">
             <h2>文件</h2>
-            <span>{sourcePdfs.length} 个 PDF</span>
+            <span>{sourceFiles.length} 个文件</span>
           </div>
 
-          {sourcePdfs.length === 0 ? (
+          {sourceFiles.length === 0 ? (
             <button className="empty-upload" onClick={() => fileInputRef.current?.click()}>
               <FilePlus2 size={30} />
-              <span>选择 PDF 文件</span>
+              <span>选择 PDF 或图片</span>
             </button>
           ) : (
             <div className="file-list">
-              {sourcePdfs.map((source) => (
+              {sourceFiles.map((source) => (
                 <div className="file-item" key={source.id}>
                   <div>
                     <strong>{source.name}</strong>
                     <span>
-                      {source.pageCount} 页 · {formatSize(source.size)}
+                      {source.kind === "pdf" ? `${source.pageCount} 页` : "图片 1 页"} · {formatSize(source.size)}
                     </span>
                   </div>
-                  <button aria-label={`移除 ${source.name}`} onClick={() => removeSourcePdf(source.id)}>
+                  <button aria-label={`移除 ${source.name}`} onClick={() => removeSourceFile(source.id)}>
                     <X size={16} />
                   </button>
                 </div>
@@ -305,17 +426,27 @@ export function App() {
             <span>勾选顺序会进入右侧列表</span>
           </div>
           <div className="source-scroll">
-            {sourcePdfs.length === 0 ? (
-              <EmptyState title="等待上传" text="添加 PDF 后，这里会显示每一页的缩略图。" />
+            {sourceFiles.length === 0 ? (
+              <EmptyState title="等待上传" text="添加 PDF 或图片后，这里会显示每一页的缩略图。" />
             ) : (
-              sourcePdfs.map((source) => (
-                <PdfPageGrid
-                  key={source.id}
-                  source={source}
-                  selectedPages={selectedPages}
-                  onTogglePage={togglePage}
-                />
-              ))
+              sourceFiles.map((source) =>
+                source.kind === "pdf" ? (
+                  <PdfPageGrid
+                    key={source.id}
+                    source={source}
+                    selectedPages={selectedPages}
+                    onTogglePage={togglePage}
+                  />
+                ) : (
+                  <ImagePageGrid
+                    key={source.id}
+                    source={source}
+                    selectedPages={selectedPages}
+                    onTogglePage={togglePage}
+                    onUpdatePlacement={updateImagePlacement}
+                  />
+                ),
+              )
             )}
           </div>
         </section>
@@ -406,7 +537,7 @@ function PdfPageGrid({
   const selectedByPage = useMemo(() => {
     const map = new Map<number, number>();
     selectedPages.forEach((page, index) => {
-      if (page.sourcePdfId === source.id) map.set(page.pageIndex, index + 1);
+      if (page.sourceFileId === source.id) map.set(page.pageIndex, index + 1);
     });
     return map;
   }, [selectedPages, source.id]);
@@ -432,6 +563,189 @@ function PdfPageGrid({
           ))}
         </div>
       )}
+    </section>
+  );
+}
+
+function ImagePageGrid({
+  source,
+  selectedPages,
+  onTogglePage,
+  onUpdatePlacement,
+}: {
+  source: SourceImage;
+  selectedPages: SelectedPage[];
+  onTogglePage: (source: SourceImage, pageIndex: number) => void;
+  onUpdatePlacement: (sourceId: string, getPlacement: (source: SourceImage) => ImagePlacement) => void;
+}) {
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    placement: ImagePlacement;
+  } | null>(null);
+
+  const selectedOrder = useMemo(() => {
+    const index = selectedPages.findIndex((page) => page.sourceFileId === source.id);
+    return index === -1 ? undefined : index + 1;
+  }, [selectedPages, source.id]);
+
+  const fitPlacement = useMemo(
+    () => createFitPlacement(source.imageSize, source.pageSize),
+    [source.imageSize, source.pageSize],
+  );
+  const zoom = Math.round((source.placement.width / fitPlacement.width) * 100);
+  const imageStyle = {
+    left: `${(source.placement.x / source.pageSize.width) * 100}%`,
+    top: `${((source.pageSize.height - source.placement.y - source.placement.height) / source.pageSize.height) * 100}%`,
+    width: `${(source.placement.width / source.pageSize.width) * 100}%`,
+    height: `${(source.placement.height / source.pageSize.height) * 100}%`,
+  };
+
+  function setPlacement(placement: ImagePlacement) {
+    onUpdatePlacement(source.id, () => placement);
+  }
+
+  function resizeFromZoom(nextZoom: number) {
+    onUpdatePlacement(source.id, (current) => {
+      const nextWidth = fitPlacement.width * (nextZoom / 100);
+      const nextHeight = fitPlacement.height * (nextZoom / 100);
+      const centerX = current.placement.x + current.placement.width / 2;
+      const centerY = current.placement.y + current.placement.height / 2;
+
+      return {
+        x: centerX - nextWidth / 2,
+        y: centerY - nextHeight / 2,
+        width: nextWidth,
+        height: nextHeight,
+      };
+    });
+  }
+
+  function applyPreset(preset: "fit" | "fill" | "center" | "top" | "bottom" | "left" | "right") {
+    if (preset === "fit") {
+      setPlacement(fitPlacement);
+      return;
+    }
+
+    onUpdatePlacement(source.id, (current) => {
+      const placement = current.placement;
+      const page = current.pageSize;
+
+      if (preset === "fill") {
+        const scale = Math.max(page.width / current.imageSize.width, page.height / current.imageSize.height);
+        const width = current.imageSize.width * scale;
+        const height = current.imageSize.height * scale;
+        return {
+          x: (page.width - width) / 2,
+          y: (page.height - height) / 2,
+          width,
+          height,
+        };
+      }
+
+      const next = { ...placement };
+      if (preset === "center") {
+        next.x = (page.width - placement.width) / 2;
+        next.y = (page.height - placement.height) / 2;
+      }
+      if (preset === "top") next.y = page.height - placement.height;
+      if (preset === "bottom") next.y = 0;
+      if (preset === "left") next.x = 0;
+      if (preset === "right") next.x = page.width - placement.width;
+      return next;
+    });
+  }
+
+  function startDrag(event: PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      placement: source.placement,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function dragImage(event: PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    const canvas = canvasRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const dx = ((event.clientX - drag.startX) / rect.width) * source.pageSize.width;
+    const dy = ((event.clientY - drag.startY) / rect.height) * source.pageSize.height;
+
+    setPlacement({
+      ...drag.placement,
+      x: drag.placement.x + dx,
+      y: drag.placement.y - dy,
+    });
+  }
+
+  function stopDrag(event: PointerEvent<HTMLDivElement>) {
+    if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+  }
+
+  return (
+    <section className="pdf-group image-editor-group">
+      <div className="pdf-group-title">
+        <strong>{source.name}</strong>
+        <span>图片 1 页</span>
+      </div>
+
+      <div className="image-editor">
+        <div className="image-page-wrap">
+          <div
+            ref={canvasRef}
+            className={selectedOrder ? "image-page selected" : "image-page"}
+            style={{ aspectRatio: `${source.pageSize.width} / ${source.pageSize.height}` }}
+          >
+            <img
+              className="image-page-asset"
+              src={source.objectUrl}
+              alt=""
+              style={imageStyle}
+              onPointerDown={startDrag}
+              onPointerMove={dragImage}
+              onPointerUp={stopDrag}
+              onPointerCancel={stopDrag}
+            />
+          </div>
+        </div>
+
+        <div className="image-editor-controls">
+          <div className="image-editor-row">
+            <button className={selectedOrder ? "selected-toggle active" : "selected-toggle"} onClick={() => onTogglePage(source, 0)}>
+              {selectedOrder ? `已加入 #${selectedOrder}` : "加入新 PDF"}
+            </button>
+            <span>{Math.round(source.pageSize.width)} × {Math.round(source.pageSize.height)}</span>
+          </div>
+
+          <label className="zoom-control">
+            <span>缩放 {zoom}%</span>
+            <input
+              type="range"
+              min="20"
+              max="400"
+              value={zoom}
+              onChange={(event) => resizeFromZoom(Number(event.target.value))}
+            />
+          </label>
+
+          <div className="preset-grid">
+            <button onClick={() => applyPreset("fit")}>适应</button>
+            <button onClick={() => applyPreset("fill")}>填满</button>
+            <button onClick={() => applyPreset("center")}>居中</button>
+            <button onClick={() => applyPreset("top")}>置顶</button>
+            <button onClick={() => applyPreset("bottom")}>置底</button>
+            <button onClick={() => applyPreset("left")}>左靠齐</button>
+            <button onClick={() => applyPreset("right")}>右靠齐</button>
+          </div>
+        </div>
+      </div>
     </section>
   );
 }
@@ -510,8 +824,8 @@ function SortableSelectedPage({
       </button>
       <div className="selected-index">{index + 1}</div>
       <div className="selected-copy">
-        <strong>{page.sourcePdfName}</strong>
-        <span>原第 {page.pageNumber} 页</span>
+        <strong>{page.sourceFileName}</strong>
+        <span>{page.sourceKind === "image" ? "图片页" : `原第 ${page.pageNumber} 页`}</span>
       </div>
       <button aria-label="删除页面" onClick={onRemove}>
         <Trash2 size={17} />
