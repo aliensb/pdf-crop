@@ -17,19 +17,31 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   Download,
+  Edit3,
   Eye,
   FilePlus2,
   GripVertical,
   Loader2,
   RotateCcw,
   Trash2,
+  Type,
   Upload,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { buildMergedPdf, getPageCount, loadPreviewDocument } from "./pdf";
-import type { ImagePlacement, PageSize, PdfError, SelectedPage, SourceFile, SourceImage, SourcePdf } from "./types";
+import type {
+  ImageCrop,
+  ImagePlacement,
+  ImageTextBox,
+  PageSize,
+  PdfError,
+  SelectedPage,
+  SourceFile,
+  SourceImage,
+  SourcePdf,
+} from "./types";
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const MAX_TOTAL_SIZE = 200 * 1024 * 1024;
@@ -72,7 +84,7 @@ function createFitPlacement(imageSize: PageSize, pageSize: PageSize): ImagePlace
 async function prepareImageFile(
   file: File,
   arrayBuffer: ArrayBuffer,
-): Promise<Pick<SourceImage, "arrayBuffer" | "mimeType" | "objectUrl" | "imageSize" | "pageSize" | "placement">> {
+): Promise<Pick<SourceImage, "arrayBuffer" | "mimeType" | "objectUrl" | "imageSize" | "pageSize" | "placement" | "crop" | "texts">> {
   const sourceType = file.type || (file.name.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg");
 
   if (sourceType === "image/jpeg" || sourceType === "image/png") {
@@ -90,6 +102,8 @@ async function prepareImageFile(
       imageSize,
       pageSize,
       placement: createFitPlacement(imageSize, pageSize),
+      crop: { x: 0, y: 0, width: imageSize.width, height: imageSize.height },
+      texts: [],
     };
   }
 
@@ -119,6 +133,8 @@ async function prepareImageFile(
     imageSize,
     pageSize,
     placement: createFitPlacement(imageSize, pageSize),
+    crop: { x: 0, y: 0, width: imageSize.width, height: imageSize.height },
+    texts: [],
   };
 }
 
@@ -129,6 +145,7 @@ export function App() {
   const [isImporting, setIsImporting] = useState(false);
   const [isBuilding, setIsBuilding] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [editingImageId, setEditingImageId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sourceFilesRef = useRef<SourceFile[]>([]);
 
@@ -141,6 +158,9 @@ export function App() {
 
   const totalSize = sourceFiles.reduce((sum, file) => sum + file.size, 0);
   const totalPages = sourceFiles.reduce((sum, file) => sum + file.pageCount, 0);
+  const editingImage = sourceFiles.find(
+    (source): source is SourceImage => source.id === editingImageId && source.kind === "image",
+  );
   const canBuild = selectedPages.length > 0 && !isBuilding;
 
   useEffect(() => {
@@ -267,6 +287,7 @@ export function App() {
   }
 
   function removeSourceFile(sourceId: string) {
+    if (editingImageId === sourceId) setEditingImageId(null);
     setSourceFiles((current) => {
       const removed = current.find((source) => source.id === sourceId);
       if (removed?.kind === "image") URL.revokeObjectURL(removed.objectUrl);
@@ -281,11 +302,11 @@ export function App() {
     clearPreview();
   }
 
-  function updateImagePlacement(sourceId: string, getPlacement: (source: SourceImage) => ImagePlacement) {
+  function updateImageSource(sourceId: string, getSource: (source: SourceImage) => SourceImage) {
     setSourceFiles((current) =>
       current.map((source) =>
         source.id === sourceId && source.kind === "image"
-          ? { ...source, placement: getPlacement(source) }
+          ? getSource(source)
           : source,
       ),
     );
@@ -337,6 +358,7 @@ export function App() {
     setSourceFiles([]);
     setSelectedPages([]);
     setErrors([]);
+    setEditingImageId(null);
     clearPreview();
   }
 
@@ -443,7 +465,7 @@ export function App() {
                     source={source}
                     selectedPages={selectedPages}
                     onTogglePage={togglePage}
-                    onUpdatePlacement={updateImagePlacement}
+                    onEdit={() => setEditingImageId(source.id)}
                   />
                 ),
               )
@@ -486,6 +508,16 @@ export function App() {
           </div>
           <iframe src={previewUrl} title="新 PDF 预览" />
         </section>
+      )}
+
+      {editingImage && (
+        <ImageEditorModal
+          source={editingImage}
+          selectedPages={selectedPages}
+          onClose={() => setEditingImageId(null)}
+          onTogglePage={() => togglePage(editingImage, 0)}
+          onUpdate={(getSource) => updateImageSource(editingImage.id, getSource)}
+        />
       )}
     </main>
   );
@@ -571,54 +603,118 @@ function ImagePageGrid({
   source,
   selectedPages,
   onTogglePage,
-  onUpdatePlacement,
+  onEdit,
 }: {
   source: SourceImage;
   selectedPages: SelectedPage[];
   onTogglePage: (source: SourceImage, pageIndex: number) => void;
-  onUpdatePlacement: (sourceId: string, getPlacement: (source: SourceImage) => ImagePlacement) => void;
+  onEdit: () => void;
 }) {
-  const canvasRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    placement: ImagePlacement;
-  } | null>(null);
-
   const selectedOrder = useMemo(() => {
     const index = selectedPages.findIndex((page) => page.sourceFileId === source.id);
     return index === -1 ? undefined : index + 1;
   }, [selectedPages, source.id]);
 
+  return (
+    <section className="pdf-group">
+      <div className="pdf-group-title">
+        <strong>{source.name}</strong>
+        <span>图片 1 页</span>
+      </div>
+      <div className="page-grid">
+        <div className={selectedOrder ? "page-thumb selected image-card" : "page-thumb image-card"}>
+          <div className="thumb-canvas image-thumb">
+            <ImageCanvasPreview source={source} compact />
+          </div>
+          <div className="thumb-meta">
+            <span>图片页</span>
+            {selectedOrder && <strong>#{selectedOrder}</strong>}
+          </div>
+          <div className="image-card-actions">
+            <button onClick={() => onTogglePage(source, 0)}>{selectedOrder ? "移出" : "加入"}</button>
+            <button onClick={onEdit}>
+              <Edit3 size={15} />
+              编辑
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ImageEditorModal({
+  source,
+  selectedPages,
+  onClose,
+  onTogglePage,
+  onUpdate,
+}: {
+  source: SourceImage;
+  selectedPages: SelectedPage[];
+  onClose: () => void;
+  onTogglePage: () => void;
+  onUpdate: (getSource: (source: SourceImage) => SourceImage) => void;
+}) {
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<
+    | {
+        kind: "image";
+        pointerId: number;
+        startX: number;
+        startY: number;
+        placement: ImagePlacement;
+      }
+    | {
+        kind: "text";
+        pointerId: number;
+        textId: string;
+        startX: number;
+        startY: number;
+        x: number;
+        y: number;
+      }
+    | null
+  >(null);
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(source.texts[0]?.id ?? null);
+  const selectedText = source.texts.find((text) => text.id === selectedTextId) ?? null;
+  const selectedOrder = useMemo(() => {
+    const index = selectedPages.findIndex((page) => page.sourceFileId === source.id);
+    return index === -1 ? undefined : index + 1;
+  }, [selectedPages, source.id]);
   const fitPlacement = useMemo(
     () => createFitPlacement(source.imageSize, source.pageSize),
     [source.imageSize, source.pageSize],
   );
   const zoom = Math.round((source.placement.width / fitPlacement.width) * 100);
-  const imageStyle = {
-    left: `${(source.placement.x / source.pageSize.width) * 100}%`,
-    top: `${((source.pageSize.height - source.placement.y - source.placement.height) / source.pageSize.height) * 100}%`,
-    width: `${(source.placement.width / source.pageSize.width) * 100}%`,
-    height: `${(source.placement.height / source.pageSize.height) * 100}%`,
-  };
+
+  function updateSource(getSource: (source: SourceImage) => SourceImage) {
+    onUpdate(getSource);
+  }
 
   function setPlacement(placement: ImagePlacement) {
-    onUpdatePlacement(source.id, () => placement);
+    updateSource((current) => ({ ...current, placement }));
+  }
+
+  function setCrop(crop: ImageCrop) {
+    updateSource((current) => ({ ...current, crop: clampCrop(crop, current.imageSize) }));
   }
 
   function resizeFromZoom(nextZoom: number) {
-    onUpdatePlacement(source.id, (current) => {
+    updateSource((current) => {
       const nextWidth = fitPlacement.width * (nextZoom / 100);
       const nextHeight = fitPlacement.height * (nextZoom / 100);
       const centerX = current.placement.x + current.placement.width / 2;
       const centerY = current.placement.y + current.placement.height / 2;
 
       return {
-        x: centerX - nextWidth / 2,
-        y: centerY - nextHeight / 2,
-        width: nextWidth,
-        height: nextHeight,
+        ...current,
+        placement: {
+          x: centerX - nextWidth / 2,
+          y: centerY - nextHeight / 2,
+          width: nextWidth,
+          height: nextHeight,
+        },
       };
     });
   }
@@ -629,7 +725,7 @@ function ImagePageGrid({
       return;
     }
 
-    onUpdatePlacement(source.id, (current) => {
+    updateSource((current) => {
       const placement = current.placement;
       const page = current.pageSize;
 
@@ -638,10 +734,13 @@ function ImagePageGrid({
         const width = current.imageSize.width * scale;
         const height = current.imageSize.height * scale;
         return {
-          x: (page.width - width) / 2,
-          y: (page.height - height) / 2,
-          width,
-          height,
+          ...current,
+          placement: {
+            x: (page.width - width) / 2,
+            y: (page.height - height) / 2,
+            width,
+            height,
+          },
         };
       }
 
@@ -654,13 +753,14 @@ function ImagePageGrid({
       if (preset === "bottom") next.y = 0;
       if (preset === "left") next.x = 0;
       if (preset === "right") next.x = page.width - placement.width;
-      return next;
+      return { ...current, placement: next };
     });
   }
 
   function startDrag(event: PointerEvent<HTMLDivElement>) {
     event.preventDefault();
     dragRef.current = {
+      kind: "image",
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
@@ -672,7 +772,7 @@ function ImagePageGrid({
   function dragImage(event: PointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     const canvas = canvasRef.current;
-    if (!drag || drag.pointerId !== event.pointerId || !canvas) return;
+    if (!drag || drag.kind !== "image" || drag.pointerId !== event.pointerId || !canvas) return;
 
     const rect = canvas.getBoundingClientRect();
     const dx = ((event.clientX - drag.startX) / rect.width) * source.pageSize.width;
@@ -689,64 +789,282 @@ function ImagePageGrid({
     if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
   }
 
-  return (
-    <section className="pdf-group image-editor-group">
-      <div className="pdf-group-title">
-        <strong>{source.name}</strong>
-        <span>图片 1 页</span>
-      </div>
+  function addText() {
+    const id = createId("text");
+    const nextText: ImageTextBox = {
+      id,
+      text: "文字",
+      x: source.pageSize.width / 2 - 30,
+      y: source.pageSize.height / 2,
+      fontSize: 24,
+      color: "#111827",
+    };
+    setSelectedTextId(id);
+    updateSource((current) => ({ ...current, texts: [...current.texts, nextText] }));
+  }
 
-      <div className="image-editor">
-        <div className="image-page-wrap">
-          <div
-            ref={canvasRef}
-            className={selectedOrder ? "image-page selected" : "image-page"}
-            style={{ aspectRatio: `${source.pageSize.width} / ${source.pageSize.height}` }}
-          >
-            <img
-              className="image-page-asset"
-              src={source.objectUrl}
-              alt=""
-              style={imageStyle}
-              onPointerDown={startDrag}
-              onPointerMove={dragImage}
-              onPointerUp={stopDrag}
-              onPointerCancel={stopDrag}
-            />
+  function updateSelectedText(patch: Partial<ImageTextBox>) {
+    if (!selectedTextId) return;
+    updateSource((current) => ({
+      ...current,
+      texts: current.texts.map((text) => (text.id === selectedTextId ? { ...text, ...patch } : text)),
+    }));
+  }
+
+  function removeSelectedText() {
+    if (!selectedTextId) return;
+    updateSource((current) => ({
+      ...current,
+      texts: current.texts.filter((text) => text.id !== selectedTextId),
+    }));
+    setSelectedTextId(null);
+  }
+
+  function startTextDrag(event: PointerEvent<HTMLDivElement>, text: ImageTextBox) {
+    event.stopPropagation();
+    event.preventDefault();
+    setSelectedTextId(text.id);
+    dragRef.current = {
+      kind: "text",
+      pointerId: event.pointerId,
+      textId: text.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      x: text.x,
+      y: text.y,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function dragText(event: PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    const canvas = canvasRef.current;
+    if (!drag || drag.kind !== "text" || drag.pointerId !== event.pointerId || !canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const dx = ((event.clientX - drag.startX) / rect.width) * source.pageSize.width;
+    const dy = ((event.clientY - drag.startY) / rect.height) * source.pageSize.height;
+
+    updateSource((current) => ({
+      ...current,
+      texts: current.texts.map((text) =>
+        text.id === drag.textId ? { ...text, x: drag.x + dx, y: drag.y - dy } : text,
+      ),
+    }));
+  }
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="image-modal">
+        <div className="modal-heading">
+          <div>
+            <h2>{source.name}</h2>
+            <span>图片页编辑</span>
           </div>
+          <button onClick={onClose} aria-label="关闭编辑器">
+            <X size={18} />
+          </button>
         </div>
 
-        <div className="image-editor-controls">
-          <div className="image-editor-row">
-            <button className={selectedOrder ? "selected-toggle active" : "selected-toggle"} onClick={() => onTogglePage(source, 0)}>
+        <div className="modal-body">
+          <div className="modal-canvas-wrap">
+            <div className="image-page-wrap large">
+              <div
+                ref={canvasRef}
+                className={selectedOrder ? "image-page selected" : "image-page"}
+                style={{ aspectRatio: `${source.pageSize.width} / ${source.pageSize.height}` }}
+              >
+                <ImageCanvasPreview
+                  source={source}
+                  onImagePointerDown={startDrag}
+                  onImagePointerMove={dragImage}
+                  onImagePointerUp={stopDrag}
+                  onTextPointerDown={startTextDrag}
+                  onTextPointerMove={dragText}
+                  onTextPointerUp={stopDrag}
+                  selectedTextId={selectedTextId}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="modal-controls">
+            <button className={selectedOrder ? "selected-toggle active" : "selected-toggle"} onClick={onTogglePage}>
               {selectedOrder ? `已加入 #${selectedOrder}` : "加入新 PDF"}
             </button>
-            <span>{Math.round(source.pageSize.width)} × {Math.round(source.pageSize.height)}</span>
-          </div>
 
-          <label className="zoom-control">
-            <span>缩放 {zoom}%</span>
-            <input
-              type="range"
-              min="20"
-              max="400"
-              value={zoom}
-              onChange={(event) => resizeFromZoom(Number(event.target.value))}
-            />
-          </label>
+            <label className="zoom-control">
+              <span>缩放 {zoom}%</span>
+              <input
+                type="range"
+                min="20"
+                max="400"
+                value={zoom}
+                onChange={(event) => resizeFromZoom(Number(event.target.value))}
+              />
+            </label>
 
-          <div className="preset-grid">
-            <button onClick={() => applyPreset("fit")}>适应</button>
-            <button onClick={() => applyPreset("fill")}>填满</button>
-            <button onClick={() => applyPreset("center")}>居中</button>
-            <button onClick={() => applyPreset("top")}>置顶</button>
-            <button onClick={() => applyPreset("bottom")}>置底</button>
-            <button onClick={() => applyPreset("left")}>左靠齐</button>
-            <button onClick={() => applyPreset("right")}>右靠齐</button>
+            <div className="preset-grid">
+              <button onClick={() => applyPreset("fit")}>适应</button>
+              <button onClick={() => applyPreset("fill")}>填满</button>
+              <button onClick={() => applyPreset("center")}>居中</button>
+              <button onClick={() => applyPreset("top")}>置顶</button>
+              <button onClick={() => applyPreset("bottom")}>置底</button>
+              <button onClick={() => applyPreset("left")}>左靠齐</button>
+              <button onClick={() => applyPreset("right")}>右靠齐</button>
+            </div>
+
+            <div className="control-section">
+              <div className="control-title">
+                <span>裁剪</span>
+                <button onClick={() => setCrop({ x: 0, y: 0, width: source.imageSize.width, height: source.imageSize.height })}>重置</button>
+              </div>
+              <CropSlider label="左" value={source.crop.x} min={0} max={source.imageSize.width - 1} onChange={(value) => setCrop({ ...source.crop, x: value })} />
+              <CropSlider label="上" value={source.crop.y} min={0} max={source.imageSize.height - 1} onChange={(value) => setCrop({ ...source.crop, y: value })} />
+              <CropSlider label="宽" value={source.crop.width} min={1} max={source.imageSize.width - source.crop.x} onChange={(value) => setCrop({ ...source.crop, width: value })} />
+              <CropSlider label="高" value={source.crop.height} min={1} max={source.imageSize.height - source.crop.y} onChange={(value) => setCrop({ ...source.crop, height: value })} />
+            </div>
+
+            <div className="control-section">
+              <div className="control-title">
+                <span>文字</span>
+                <button onClick={addText}>
+                  <Type size={15} />
+                  添加
+                </button>
+              </div>
+              {selectedText ? (
+                <div className="text-editor-controls">
+                  <textarea value={selectedText.text} onChange={(event) => updateSelectedText({ text: event.target.value })} />
+                  <div className="text-control-row">
+                    <label>
+                      <span>字号</span>
+                      <input type="number" min="8" max="120" value={selectedText.fontSize} onChange={(event) => updateSelectedText({ fontSize: Number(event.target.value) })} />
+                    </label>
+                    <label>
+                      <span>颜色</span>
+                      <input type="color" value={selectedText.color} onChange={(event) => updateSelectedText({ color: event.target.value })} />
+                    </label>
+                    <button onClick={removeSelectedText}>
+                      <Trash2 size={15} />
+                      删除
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="empty-mini">未选择文字</div>
+              )}
+            </div>
           </div>
         </div>
       </div>
-    </section>
+    </div>
+  );
+}
+
+function CropSlider({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  const safeMax = Math.max(min, max);
+  return (
+    <label className="crop-slider">
+      <span>{label}</span>
+      <input type="range" min={min} max={safeMax} value={Math.min(value, safeMax)} onChange={(event) => onChange(Number(event.target.value))} />
+      <input type="number" min={min} max={safeMax} value={Math.round(Math.min(value, safeMax))} onChange={(event) => onChange(Number(event.target.value))} />
+    </label>
+  );
+}
+
+function clampCrop(crop: ImageCrop, imageSize: PageSize): ImageCrop {
+  const x = Math.min(Math.max(0, crop.x), imageSize.width - 1);
+  const y = Math.min(Math.max(0, crop.y), imageSize.height - 1);
+  return {
+    x,
+    y,
+    width: Math.min(Math.max(1, crop.width), imageSize.width - x),
+    height: Math.min(Math.max(1, crop.height), imageSize.height - y),
+  };
+}
+
+function ImageCanvasPreview({
+  source,
+  compact = false,
+  selectedTextId,
+  onImagePointerDown,
+  onImagePointerMove,
+  onImagePointerUp,
+  onTextPointerDown,
+  onTextPointerMove,
+  onTextPointerUp,
+}: {
+  source: SourceImage;
+  compact?: boolean;
+  selectedTextId?: string | null;
+  onImagePointerDown?: (event: PointerEvent<HTMLDivElement>) => void;
+  onImagePointerMove?: (event: PointerEvent<HTMLDivElement>) => void;
+  onImagePointerUp?: (event: PointerEvent<HTMLDivElement>) => void;
+  onTextPointerDown?: (event: PointerEvent<HTMLDivElement>, text: ImageTextBox) => void;
+  onTextPointerMove?: (event: PointerEvent<HTMLDivElement>) => void;
+  onTextPointerUp?: (event: PointerEvent<HTMLDivElement>) => void;
+}) {
+  const placementTop = source.pageSize.height - source.placement.y - source.placement.height;
+  const cropScaleX = source.imageSize.width / source.crop.width;
+  const cropScaleY = source.imageSize.height / source.crop.height;
+  const cropFrameStyle = {
+    left: `${(source.placement.x / source.pageSize.width) * 100}%`,
+    top: `${(placementTop / source.pageSize.height) * 100}%`,
+    width: `${(source.placement.width / source.pageSize.width) * 100}%`,
+    height: `${(source.placement.height / source.pageSize.height) * 100}%`,
+  };
+  const imageStyle = {
+    left: `${-(source.crop.x / source.imageSize.width) * 100 * cropScaleX}%`,
+    top: `${-(source.crop.y / source.imageSize.height) * 100 * cropScaleY}%`,
+    width: `${100 * cropScaleX}%`,
+    height: `${100 * cropScaleY}%`,
+  };
+
+  return (
+    <>
+      <div
+        className="image-crop-frame"
+        style={cropFrameStyle}
+        onPointerDown={onImagePointerDown}
+        onPointerMove={onImagePointerMove}
+        onPointerUp={onImagePointerUp}
+        onPointerCancel={onImagePointerUp}
+      >
+        <img className="image-page-asset" src={source.objectUrl} alt="" style={imageStyle} />
+      </div>
+      {!compact &&
+        source.texts.map((text) => (
+          <div
+            key={text.id}
+            className={text.id === selectedTextId ? "canvas-text selected" : "canvas-text"}
+            style={{
+              left: `${(text.x / source.pageSize.width) * 100}%`,
+              top: `${((source.pageSize.height - text.y) / source.pageSize.height) * 100}%`,
+              color: text.color,
+              fontSize: `${(text.fontSize / source.pageSize.width) * 100}%`,
+            }}
+            onPointerDown={(event) => onTextPointerDown?.(event, text)}
+            onPointerMove={onTextPointerMove}
+            onPointerUp={onTextPointerUp}
+            onPointerCancel={onTextPointerUp}
+          >
+            {text.text}
+          </div>
+        ))}
+    </>
   );
 }
 

@@ -284,6 +284,24 @@ h2 {
   box-shadow: 0 0 0 2px rgba(21, 94, 239, 0.16);
 }
 
+.image-card {
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.image-card-actions {
+  border-top: 1px solid #e5ebf1;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+  padding: 8px;
+}
+
+.image-card-actions button {
+  min-height: 32px;
+  padding: 6px 8px;
+}
+
 .thumb-canvas {
   align-items: center;
   background: #f7f9fb;
@@ -387,12 +405,189 @@ h2 {
 }
 
 .image-page-asset {
-  cursor: move;
   display: block;
+  height: 100%;
   object-fit: fill;
+  position: absolute;
+  width: 100%;
+}
+
+.image-crop-frame {
+  cursor: move;
+  overflow: hidden;
   position: absolute;
   touch-action: none;
   user-select: none;
+}
+
+.canvas-text {
+  cursor: move;
+  font-family: Arial, Helvetica, sans-serif;
+  line-height: 1.15;
+  min-width: 20px;
+  padding: 2px 4px;
+  position: absolute;
+  touch-action: none;
+  transform: translateY(-100%);
+  user-select: none;
+  white-space: pre-wrap;
+}
+
+.canvas-text.selected {
+  outline: 2px solid #155eef;
+}
+
+.modal-backdrop {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.52);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 20;
+}
+
+.image-modal {
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: calc(100vh - 48px);
+  max-width: 1360px;
+  overflow: hidden;
+  width: min(1360px, 100%);
+}
+
+.modal-heading {
+  align-items: center;
+  border-bottom: 1px solid #e5ebf1;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+}
+
+.modal-heading span {
+  color: #697789;
+  font-size: 12px;
+}
+
+.modal-body {
+  display: grid;
+  gap: 0;
+  grid-template-columns: minmax(520px, 1fr) 360px;
+  min-height: 0;
+}
+
+.modal-canvas-wrap {
+  background: #dfe6ee;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+}
+
+.image-page-wrap.large {
+  min-height: calc(100vh - 150px);
+  padding: 24px;
+}
+
+.image-page-wrap.large .image-page {
+  max-height: calc(100vh - 198px);
+  max-width: min(100%, 900px);
+}
+
+.modal-controls {
+  border-left: 1px solid #e5ebf1;
+  display: grid;
+  gap: 14px;
+  max-height: calc(100vh - 105px);
+  overflow: auto;
+  padding: 16px;
+}
+
+.control-section {
+  border-top: 1px solid #e5ebf1;
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+}
+
+.control-title,
+.text-control-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.control-title span,
+.crop-slider > span,
+.text-control-row span {
+  color: #697789;
+  font-size: 12px;
+}
+
+.control-title button,
+.text-control-row button {
+  min-height: 32px;
+  padding: 6px 8px;
+}
+
+.crop-slider {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 28px 1fr 76px;
+}
+
+.crop-slider input[type="range"] {
+  accent-color: #155eef;
+  min-width: 0;
+}
+
+.crop-slider input[type="number"],
+.text-control-row input[type="number"] {
+  border: 1px solid #d6dde5;
+  border-radius: 7px;
+  color: #202933;
+  font: inherit;
+  min-height: 34px;
+  padding: 6px 8px;
+  width: 100%;
+}
+
+.text-editor-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.text-editor-controls textarea {
+  border: 1px solid #d6dde5;
+  border-radius: 7px;
+  color: #202933;
+  font: inherit;
+  min-height: 82px;
+  padding: 8px;
+  resize: vertical;
+  width: 100%;
+}
+
+.text-control-row label {
+  display: grid;
+  gap: 5px;
+}
+
+.text-control-row input[type="color"] {
+  min-height: 34px;
+  width: 48px;
+}
+
+.empty-mini {
+  color: #697789;
+  font-size: 12px;
+  padding: 6px 0;
 }
 
 .image-editor-controls {
@@ -545,6 +740,24 @@ h2 {
   .image-editor {
     grid-template-columns: 1fr;
   }
+
+  .modal-body {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-controls {
+    border-left: 0;
+    border-top: 1px solid #e5ebf1;
+    max-height: none;
+  }
+
+  .modal-canvas-wrap {
+    padding: 14px;
+  }
+
+  .image-page-wrap.large {
+    min-height: 58vh;
+  }
 }
 
 @media (max-width: 640px) {
@@ -577,5 +790,23 @@ h2 {
 
   .preset-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .modal-backdrop {
+    padding: 8px;
+  }
+
+  .image-modal {
+    max-height: calc(100vh - 16px);
+  }
+
+  .crop-slider {
+    grid-template-columns: 24px 1fr 68px;
+  }
+
+  .text-control-row {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
 }

@@ -1,6 +1,6 @@
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import type { SelectedPage, SourceFile, SourcePdf } from "./types";
+import type { ImageCrop, SelectedPage, SourceFile, SourceImage, SourcePdf } from "./types";
 
 let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null;
 
@@ -31,6 +31,71 @@ export async function loadPreviewDocument(source: SourcePdf): Promise<PDFDocumen
   return pdfjs.getDocument({ data: source.arrayBuffer.slice(0) }).promise;
 }
 
+function isFullCrop(source: SourceImage) {
+  return (
+    source.crop.x === 0 &&
+    source.crop.y === 0 &&
+    source.crop.width === source.imageSize.width &&
+    source.crop.height === source.imageSize.height
+  );
+}
+
+function parseHexColor(value: string) {
+  const hex = value.replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(hex)) return rgb(0, 0, 0);
+  const red = Number.parseInt(hex.slice(0, 2), 16) / 255;
+  const green = Number.parseInt(hex.slice(2, 4), 16) / 255;
+  const blue = Number.parseInt(hex.slice(4, 6), 16) / 255;
+  return rgb(red, green, blue);
+}
+
+async function createCroppedImage(source: SourceImage): Promise<{ bytes: ArrayBuffer; mimeType: "image/jpeg" | "image/png" }> {
+  if (isFullCrop(source)) {
+    return { bytes: source.arrayBuffer.slice(0), mimeType: source.mimeType };
+  }
+
+  const crop = clampCrop(source.crop, source.imageSize.width, source.imageSize.height);
+  const bitmap = await createImageBitmap(new Blob([source.arrayBuffer.slice(0)], { type: source.mimeType }));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(crop.width));
+  canvas.height = Math.max(1, Math.round(crop.height));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas unavailable");
+
+  context.drawImage(
+    bitmap,
+    crop.x,
+    crop.y,
+    crop.width,
+    crop.height,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+  bitmap.close();
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((nextBlob) => {
+      if (nextBlob) resolve(nextBlob);
+      else reject(new Error("Image crop failed"));
+    }, "image/png");
+  });
+
+  return { bytes: await blob.arrayBuffer(), mimeType: "image/png" };
+}
+
+function clampCrop(crop: ImageCrop, width: number, height: number): ImageCrop {
+  const x = Math.min(Math.max(0, crop.x), width - 1);
+  const y = Math.min(Math.max(0, crop.y), height - 1);
+  return {
+    x,
+    y,
+    width: Math.min(Math.max(1, crop.width), width - x),
+    height: Math.min(Math.max(1, crop.height), height - y),
+  };
+}
+
 export async function buildMergedPdf(
   sourceFiles: SourceFile[],
   selectedPages: SelectedPage[],
@@ -38,6 +103,7 @@ export async function buildMergedPdf(
   const outputPdf = await PDFDocument.create();
   const sourceDocs = new Map<string, PDFDocument>();
   const sourcesById = new Map(sourceFiles.map((source) => [source.id, source]));
+  const textFont = await outputPdf.embedFont(StandardFonts.Helvetica);
 
   for (const source of sourceFiles) {
     if (source.kind !== "pdf") continue;
@@ -59,10 +125,11 @@ export async function buildMergedPdf(
       continue;
     }
 
+    const cropped = await createCroppedImage(source);
     const image =
-      source.mimeType === "image/png"
-        ? await outputPdf.embedPng(source.arrayBuffer.slice(0))
-        : await outputPdf.embedJpg(source.arrayBuffer.slice(0));
+      cropped.mimeType === "image/png"
+        ? await outputPdf.embedPng(cropped.bytes)
+        : await outputPdf.embedJpg(cropped.bytes);
     const page = outputPdf.addPage([source.pageSize.width, source.pageSize.height]);
 
     page.drawImage(image, {
@@ -70,6 +137,18 @@ export async function buildMergedPdf(
       y: source.placement.y,
       width: source.placement.width,
       height: source.placement.height,
+    });
+
+    source.texts.forEach((item) => {
+      item.text.split("\n").forEach((line, index) => {
+        page.drawText(line, {
+          x: item.x,
+          y: item.y - index * item.fontSize * 1.25,
+          size: item.fontSize,
+          font: textFont,
+          color: parseHexColor(item.color),
+        });
+      });
     });
   }
 

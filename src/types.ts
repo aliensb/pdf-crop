@@ -19,6 +19,22 @@ export type ImagePlacement = {
   height: number;
 };
 
+export type ImageCrop = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type ImageTextBox = {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  fontSize: number;
+  color: string;
+};
+
 export type SourceImage = {
   id: string;
   kind: "image";
@@ -30,6 +46,8 @@ export type SourceImage = {
   imageSize: PageSize;
   pageSize: PageSize;
   placement: ImagePlacement;
+  crop: ImageCrop;
+  texts: ImageTextBox[];
   pageCount: 1;
 };
 
