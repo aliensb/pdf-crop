@@ -33,6 +33,7 @@ export type ImageTextBox = {
   y: number;
   fontSize: number;
   color: string;
+  fontFamily: "Helvetica" | "TimesRoman" | "Courier";
 };
 
 export type SourceImage = {

@@ -103,7 +103,11 @@ export async function buildMergedPdf(
   const outputPdf = await PDFDocument.create();
   const sourceDocs = new Map<string, PDFDocument>();
   const sourcesById = new Map(sourceFiles.map((source) => [source.id, source]));
-  const textFont = await outputPdf.embedFont(StandardFonts.Helvetica);
+  const textFonts = {
+    Helvetica: await outputPdf.embedFont(StandardFonts.Helvetica),
+    TimesRoman: await outputPdf.embedFont(StandardFonts.TimesRoman),
+    Courier: await outputPdf.embedFont(StandardFonts.Courier),
+  };
 
   for (const source of sourceFiles) {
     if (source.kind !== "pdf") continue;
@@ -145,7 +149,7 @@ export async function buildMergedPdf(
           x: item.x,
           y: item.y - index * item.fontSize * 1.25,
           size: item.fontSize,
-          font: textFont,
+          font: textFonts[item.fontFamily],
           color: parseHexColor(item.color),
         });
       });

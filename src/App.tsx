@@ -81,6 +81,14 @@ function createFitPlacement(imageSize: PageSize, pageSize: PageSize): ImagePlace
   };
 }
 
+function getPageSizeForOrientation(orientation: "portrait" | "landscape") {
+  return orientation === "portrait" ? A4_PORTRAIT : A4_LANDSCAPE;
+}
+
+function getPageOrientation(pageSize: PageSize): "portrait" | "landscape" {
+  return pageSize.width > pageSize.height ? "landscape" : "portrait";
+}
+
 async function prepareImageFile(
   file: File,
   arrayBuffer: ArrayBuffer,
@@ -803,6 +811,7 @@ function ImageEditorModal({
       y: source.pageSize.height / 2,
       fontSize: 24,
       color: "#111827",
+      fontFamily: "Helvetica",
     };
     setSelectedTextId(id);
     updateSource((current) => ({ ...current, texts: [...current.texts, nextText] }));
@@ -814,6 +823,24 @@ function ImageEditorModal({
       ...current,
       texts: current.texts.map((text) => (text.id === selectedTextId ? { ...text, ...patch } : text)),
     }));
+  }
+
+  function setPageOrientation(orientation: "portrait" | "landscape") {
+    const nextPageSize = getPageSizeForOrientation(orientation);
+
+    updateSource((current) => {
+      const oldPageSize = current.pageSize;
+      return {
+        ...current,
+        pageSize: nextPageSize,
+        placement: createFitPlacement(current.imageSize, nextPageSize),
+        texts: current.texts.map((text) => ({
+          ...text,
+          x: (text.x / oldPageSize.width) * nextPageSize.width,
+          y: (text.y / oldPageSize.height) * nextPageSize.height,
+        })),
+      };
+    });
   }
 
   function removeSelectedText() {
@@ -898,6 +925,26 @@ function ImageEditorModal({
               {selectedOrder ? `已加入 #${selectedOrder}` : "加入新 PDF"}
             </button>
 
+            <div className="control-section compact">
+              <div className="control-title">
+                <span>画布方向</span>
+              </div>
+              <div className="orientation-toggle">
+                <button
+                  className={getPageOrientation(source.pageSize) === "portrait" ? "active" : ""}
+                  onClick={() => setPageOrientation("portrait")}
+                >
+                  竖向
+                </button>
+                <button
+                  className={getPageOrientation(source.pageSize) === "landscape" ? "active" : ""}
+                  onClick={() => setPageOrientation("landscape")}
+                >
+                  横向
+                </button>
+              </div>
+            </div>
+
             <label className="zoom-control">
               <span>缩放 {zoom}%</span>
               <input
@@ -949,6 +996,14 @@ function ImageEditorModal({
                     <label>
                       <span>颜色</span>
                       <input type="color" value={selectedText.color} onChange={(event) => updateSelectedText({ color: event.target.value })} />
+                    </label>
+                    <label>
+                      <span>字体</span>
+                      <select value={selectedText.fontFamily} onChange={(event) => updateSelectedText({ fontFamily: event.target.value as ImageTextBox["fontFamily"] })}>
+                        <option value="Helvetica">Helvetica</option>
+                        <option value="TimesRoman">Times</option>
+                        <option value="Courier">Courier</option>
+                      </select>
                     </label>
                     <button onClick={removeSelectedText}>
                       <Trash2 size={15} />
@@ -1059,7 +1114,8 @@ function ImageCanvasPreview({
               left: `${(text.x / source.pageSize.width) * 100}%`,
               top: `${((source.pageSize.height - text.y) / source.pageSize.height) * 100}%`,
               color: text.color,
-              fontSize: `${(text.fontSize / source.pageSize.width) * 100}%`,
+              fontFamily: text.fontFamily === "TimesRoman" ? "Times New Roman, serif" : text.fontFamily,
+              fontSize: `${(text.fontSize / source.pageSize.width) * 100}cqw`,
             }}
             onPointerDown={(event) => onTextPointerDown?.(event, text)}
             onPointerMove={onTextPointerMove}
