@@ -30,7 +30,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import { buildMergedPdf, getPageCount, loadPreviewDocument } from "./pdf";
+import { buildMergedPdf, compressImagePdf, getPageCount, loadPreviewDocument } from "./pdf";
 import type {
   ImageCrop,
   ImagePlacement,
@@ -152,6 +152,7 @@ export function App() {
   const [errors, setErrors] = useState<PdfError[]>([]);
   const [isImporting, setIsImporting] = useState(false);
   const [isBuilding, setIsBuilding] = useState(false);
+  const [compressingPdfId, setCompressingPdfId] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [editingImageId, setEditingImageId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -352,6 +353,26 @@ export function App() {
     }
   }
 
+  async function compressSourcePdf(source: SourcePdf) {
+    setCompressingPdfId(source.id);
+    setErrors([]);
+
+    try {
+      const blob = await compressImagePdf(source);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const baseName = source.name.replace(/\.pdf$/i, "");
+      link.href = url;
+      link.download = `${baseName}-compressed.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setErrors([{ id: createId("error"), message: `${source.name} 压缩失败，请确认这个 PDF 可以正常预览。` }]);
+    } finally {
+      setCompressingPdfId(null);
+    }
+  }
+
   function clearPreview() {
     setPreviewUrl((current) => {
       if (current) URL.revokeObjectURL(current);
@@ -435,9 +456,17 @@ export function App() {
                       {source.kind === "pdf" ? `${source.pageCount} 页` : "图片 1 页"} · {formatSize(source.size)}
                     </span>
                   </div>
-                  <button aria-label={`移除 ${source.name}`} onClick={() => removeSourceFile(source.id)}>
-                    <X size={16} />
-                  </button>
+                  <div className="file-actions">
+                    {source.kind === "pdf" && (
+                      <button onClick={() => compressSourcePdf(source)} disabled={compressingPdfId === source.id}>
+                        {compressingPdfId === source.id ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
+                        压缩
+                      </button>
+                    )}
+                    <button aria-label={`移除 ${source.name}`} onClick={() => removeSourceFile(source.id)}>
+                      <X size={16} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

@@ -2,6 +2,9 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import type { ImageCrop, SelectedPage, SourceFile, SourceImage, SourcePdf } from "./types";
 
+const DEFAULT_COMPRESS_MAX_EDGE = 1600;
+const DEFAULT_COMPRESS_QUALITY = 0.72;
+
 let pdfjsPromise: Promise<typeof import("pdfjs-dist")> | null = null;
 
 export async function getPdfJs() {
@@ -29,6 +32,60 @@ export async function getPageCount(arrayBuffer: ArrayBuffer) {
 export async function loadPreviewDocument(source: SourcePdf): Promise<PDFDocumentProxy> {
   const pdfjs = await getPdfJs();
   return pdfjs.getDocument({ data: source.arrayBuffer.slice(0) }).promise;
+}
+
+async function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Canvas export failed"));
+    }, type, quality);
+  });
+}
+
+export async function compressImagePdf(
+  source: SourcePdf,
+  options: { maxEdge?: number; quality?: number } = {},
+) {
+  const maxEdge = options.maxEdge ?? DEFAULT_COMPRESS_MAX_EDGE;
+  const quality = options.quality ?? DEFAULT_COMPRESS_QUALITY;
+  const pdfjs = await getPdfJs();
+  const sourceDoc = await pdfjs.getDocument({ data: source.arrayBuffer.slice(0) }).promise;
+  const outputPdf = await PDFDocument.create();
+
+  try {
+    for (let pageNumber = 1; pageNumber <= sourceDoc.numPages; pageNumber += 1) {
+      const sourcePage = await sourceDoc.getPage(pageNumber);
+      const baseViewport = sourcePage.getViewport({ scale: 1 });
+      const renderScale = Math.min(2, maxEdge / Math.max(baseViewport.width, baseViewport.height));
+      const viewport = sourcePage.getViewport({ scale: renderScale });
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("Canvas unavailable");
+
+      canvas.width = Math.max(1, Math.ceil(viewport.width));
+      canvas.height = Math.max(1, Math.ceil(viewport.height));
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await sourcePage.render({ canvasContext: context, viewport }).promise;
+
+      const imageBlob = await canvasToBlob(canvas, "image/jpeg", quality);
+      const image = await outputPdf.embedJpg(await imageBlob.arrayBuffer());
+      const outputPage = outputPdf.addPage([baseViewport.width, baseViewport.height]);
+      outputPage.drawImage(image, {
+        x: 0,
+        y: 0,
+        width: baseViewport.width,
+        height: baseViewport.height,
+      });
+      sourcePage.cleanup();
+    }
+  } finally {
+    await sourceDoc.destroy();
+  }
+
+  const bytes = await outputPdf.save();
+  return new Blob([bytes.buffer as ArrayBuffer], { type: "application/pdf" });
 }
 
 function isFullCrop(source: SourceImage) {
@@ -75,12 +132,7 @@ async function createCroppedImage(source: SourceImage): Promise<{ bytes: ArrayBu
   );
   bitmap.close();
 
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((nextBlob) => {
-      if (nextBlob) resolve(nextBlob);
-      else reject(new Error("Image crop failed"));
-    }, "image/png");
-  });
+  const blob = await canvasToBlob(canvas, "image/png");
 
   return { bytes: await blob.arrayBuffer(), mimeType: "image/png" };
 }

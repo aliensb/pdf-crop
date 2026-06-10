@@ -196,6 +196,12 @@ h2 {
   padding: 11px;
 }
 
+.file-actions {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
 .file-item strong,
 .selected-copy strong,
 .pdf-group-title strong {
@@ -211,11 +217,15 @@ h2 {
   font-size: 12px;
 }
 
-.file-item button,
 .selected-page > button,
 .drag-handle {
   min-height: 30px;
   padding: 5px;
+}
+
+.file-actions button {
+  min-height: 30px;
+  padding: 5px 8px;
 }
 
 .empty-upload,
