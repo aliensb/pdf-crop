@@ -46,12 +46,16 @@ jobs:
           username: root
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
-            cd /opt/pdf-crop
+            set -e
 
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
             docker pull ${{ env.IMAGE_NAME }}:latest
-            docker compose pull
-            docker compose up -d --force-recreate
+            docker rm -f pdf-crop || true
+            docker run -d \
+              --name pdf-crop \
+              --restart unless-stopped \
+              -p 8082:8082 \
+              ${{ env.IMAGE_NAME }}:latest
 
             echo "Deploy complete. Image: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
