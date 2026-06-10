@@ -45,7 +45,7 @@ async function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: n
 
 export async function compressImagePdf(
   source: SourcePdf,
-  options: { maxEdge?: number; quality?: number } = {},
+  options: { maxEdge?: number; quality?: number; onProgress?: (currentPage: number, totalPages: number) => void } = {},
 ) {
   const maxEdge = options.maxEdge ?? DEFAULT_COMPRESS_MAX_EDGE;
   const quality = options.quality ?? DEFAULT_COMPRESS_QUALITY;
@@ -79,6 +79,8 @@ export async function compressImagePdf(
         height: baseViewport.height,
       });
       sourcePage.cleanup();
+      options.onProgress?.(pageNumber, sourceDoc.numPages);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
   } finally {
     await sourceDoc.destroy();

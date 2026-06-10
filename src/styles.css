@@ -124,6 +124,35 @@ h2 {
   padding: 12px 14px;
 }
 
+.progress-panel {
+  background: #ffffff;
+  border: 1px solid #c7d7fe;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  margin: 0 auto 16px;
+  max-width: 1500px;
+  padding: 12px 14px;
+}
+
+.progress-panel > div {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.progress-panel span {
+  color: #697789;
+  font-size: 12px;
+}
+
+.progress-panel progress {
+  accent-color: #155eef;
+  height: 10px;
+  width: 100%;
+}
+
 .workspace {
   display: grid;
   gap: 14px;

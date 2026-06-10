@@ -153,6 +153,7 @@ export function App() {
   const [isImporting, setIsImporting] = useState(false);
   const [isBuilding, setIsBuilding] = useState(false);
   const [compressingPdfId, setCompressingPdfId] = useState<string | null>(null);
+  const [compressionProgress, setCompressionProgress] = useState<{ current: number; total: number } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [editingImageId, setEditingImageId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -233,7 +234,7 @@ export function App() {
         const arrayBuffer = await file.arrayBuffer();
         const pageCount = isPdf ? await getPageCount(arrayBuffer) : 1;
 
-        if (totalPages + loaded.reduce((sum, item) => sum + item.pageCount, 0) + pageCount > MAX_TOTAL_PAGES) {
+        if (!isPdf && totalPages + loaded.reduce((sum, item) => sum + item.pageCount, 0) + pageCount > MAX_TOTAL_PAGES) {
           setErrors((current) => [
             ...current,
             { id: createId("error"), message: `总页数超过 300 页，${file.name} 已跳过。` },
@@ -361,21 +362,27 @@ export function App() {
 
   async function compressSourcePdf(source: SourcePdf) {
     setCompressingPdfId(source.id);
+    setCompressionProgress({ current: 0, total: source.pageCount });
     setErrors([]);
 
     try {
-      const blob = await compressImagePdf(source);
+      const blob = await compressImagePdf(source, {
+        onProgress: (current, total) => setCompressionProgress({ current, total }),
+      });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       const baseName = source.name.replace(/\.pdf$/i, "");
       link.href = url;
       link.download = `${baseName}-compressed.pdf`;
+      document.body.append(link);
       link.click();
-      URL.revokeObjectURL(url);
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
       setErrors([{ id: createId("error"), message: `${source.name} 压缩失败，请确认这个 PDF 可以正常预览。` }]);
     } finally {
       setCompressingPdfId(null);
+      setCompressionProgress(null);
     }
   }
 
@@ -437,6 +444,18 @@ export function App() {
           {errors.map((error) => (
             <div key={error.id}>{error.message}</div>
           ))}
+        </section>
+      )}
+
+      {compressionProgress && (
+        <section className="progress-panel" aria-live="polite">
+          <div>
+            <strong>正在压缩 PDF</strong>
+            <span>
+              {compressionProgress.current}/{compressionProgress.total} 页
+            </span>
+          </div>
+          <progress value={compressionProgress.current} max={compressionProgress.total} />
         </section>
       )}
 
