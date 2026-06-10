@@ -43,8 +43,8 @@ import type {
   SourcePdf,
 } from "./types";
 
-const MAX_FILE_SIZE = 50 * 1024 * 1024;
-const MAX_TOTAL_SIZE = 200 * 1024 * 1024;
+const MAX_IMAGE_FILE_SIZE = 50 * 1024 * 1024;
+const MAX_TOTAL_IMAGE_SIZE = 200 * 1024 * 1024;
 const MAX_TOTAL_PAGES = 300;
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const A4_PORTRAIT: PageSize = { width: 595.28, height: 841.89 };
@@ -166,6 +166,7 @@ export function App() {
   );
 
   const totalSize = sourceFiles.reduce((sum, file) => sum + file.size, 0);
+  const totalImageSize = sourceFiles.reduce((sum, file) => sum + (file.kind === "image" ? file.size : 0), 0);
   const totalPages = sourceFiles.reduce((sum, file) => sum + file.pageCount, 0);
   const editingImage = sourceFiles.find(
     (source): source is SourceImage => source.id === editingImageId && source.kind === "image",
@@ -207,7 +208,9 @@ export function App() {
     const loaded: SourceFile[] = [];
 
     for (const file of incoming) {
-      if (file.size > MAX_FILE_SIZE) {
+      const isPdf = isPdfFile(file);
+
+      if (!isPdf && file.size > MAX_IMAGE_FILE_SIZE) {
         setErrors((current) => [
           ...current,
           { id: createId("error"), message: `${file.name} 超过 50MB，已跳过。` },
@@ -215,17 +218,20 @@ export function App() {
         continue;
       }
 
-      if (totalSize + loaded.reduce((sum, item) => sum + item.size, 0) + file.size > MAX_TOTAL_SIZE) {
+      if (
+        !isPdf &&
+        totalImageSize + loaded.reduce((sum, item) => sum + (item.kind === "image" ? item.size : 0), 0) + file.size > MAX_TOTAL_IMAGE_SIZE
+      ) {
         setErrors((current) => [
           ...current,
-          { id: createId("error"), message: `总文件大小超过 200MB，${file.name} 已跳过。` },
+          { id: createId("error"), message: `图片总大小超过 200MB，${file.name} 已跳过。` },
         ]);
         continue;
       }
 
       try {
         const arrayBuffer = await file.arrayBuffer();
-        const pageCount = isPdfFile(file) ? await getPageCount(arrayBuffer) : 1;
+        const pageCount = isPdf ? await getPageCount(arrayBuffer) : 1;
 
         if (totalPages + loaded.reduce((sum, item) => sum + item.pageCount, 0) + pageCount > MAX_TOTAL_PAGES) {
           setErrors((current) => [
@@ -235,7 +241,7 @@ export function App() {
           continue;
         }
 
-        if (isPdfFile(file)) {
+        if (isPdf) {
           loaded.push({
             id: createId("pdf"),
             kind: "pdf",
